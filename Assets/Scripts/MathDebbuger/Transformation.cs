@@ -3,14 +3,14 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public enum Space
-{
-    World,
-    Self
-}
-
 namespace CustomMath
 {
+    public enum Space
+    {
+        World,
+        Self
+    }
+
     public class MyTransform : IEnumerable
     {
         #region Variables
@@ -20,16 +20,18 @@ namespace CustomMath
 
         private MyTransform _parent = null;
         private readonly List<MyTransform> _children = new List<MyTransform>();
+
+        // Caching para rendimiento
+        private Mat4x4 _cachedLocalToWorld = Mat4x4.Identity;
+        private Mat4x4 _cachedWorldToLocal = Mat4x4.Identity;
+        private bool _isDirty = true;
         #endregion
 
         #region Properties
         // --- Local Space ---
         public Vec3 localPosition
         {
-            get
-            {
-                return _localPosition;
-            }
+            get => _localPosition;
             set
             {
                 _localPosition = value;
@@ -39,10 +41,7 @@ namespace CustomMath
 
         public Quat localRotation
         {
-            get
-            {
-                return _localRotation;
-            }
+            get => _localRotation;
             set
             {
                 _localRotation = value;
@@ -52,22 +51,17 @@ namespace CustomMath
 
         public Vec3 localEulerAngles
         {
-            get
-            {
-                return _localRotation.eulerAngles;
-            }
+            get => _localRotation.eulerAngles;
             set
             {
                 _localRotation = Quat.Euler(value);
+                SetDirty(); // Corregido: antes no actualizaba el estado dirty
             }
         }
 
         public Vec3 localScale
         {
-            get
-            {
-                return _localScale;
-            }
+            get => _localScale;
             set
             {
                 _localScale = value;
@@ -79,12 +73,11 @@ namespace CustomMath
         {
             get
             {
-                Mat4x4 localMatrix = Mat4x4.TRS(_localPosition, _localRotation, _localScale);
-                if (_parent != null)
+                if (_isDirty)
                 {
-                    return _parent.localToWorldMatrix * localMatrix;
+                    UpdateMatrices();
                 }
-                return localMatrix;
+                return _cachedLocalToWorld;
             }
         }
 
@@ -92,26 +85,27 @@ namespace CustomMath
         {
             get
             {
-                return localToWorldMatrix.inverse;
+                if (_isDirty)
+                {
+                    UpdateMatrices();
+                }
+                return _cachedWorldToLocal;
             }
         }
 
         // --- World Space ---
         public Vec3 position
         {
-            get
-            {
-                return localToWorldMatrix.MultiplyPoint3x4(Vec3.Zero);
-            }
+            get => localToWorldMatrix.MultiplyPoint3x4(Vec3.Zero);
             set
             {
                 if (_parent != null)
                 {
-                    _localPosition = _parent.worldToLocalMatrix.MultiplyPoint3x4(value);
+                    localPosition = _parent.worldToLocalMatrix.MultiplyPoint3x4(value);
                 }
                 else
                 {
-                    _localPosition = value;
+                    localPosition = value;
                 }
             }
         }
@@ -130,25 +124,19 @@ namespace CustomMath
             {
                 if (_parent != null)
                 {
-                    _localRotation = Quat.Inverse(_parent.rotation) * value;
+                    localRotation = Quat.Inverse(_parent.rotation) * value;
                 }
                 else
                 {
-                    _localRotation = value;
+                    localRotation = value;
                 }
             }
         }
 
         public Vec3 eulerAngles
         {
-            get
-            {
-                return rotation.eulerAngles;
-            }
-            set
-            {
-                rotation = Quat.Euler(value);
-            }
+            get => rotation.eulerAngles;
+            set => rotation = Quat.Euler(value);
         }
 
         public Vec3 lossyScale
@@ -164,66 +152,19 @@ namespace CustomMath
             }
         }
 
-        // Directores de orientación
-        public Vec3 forward
-        {
-            get
-            {
-                return rotation * Vec3.Forward;
-            }
-        }
+        // --- Directores de Orientación ---
+        public Vec3 forward => rotation * Vec3.Forward;
+        public Vec3 back => rotation * Vec3.Back;
+        public Vec3 up => rotation * Vec3.Up;
+        public Vec3 down => rotation * Vec3.Down;
+        public Vec3 right => rotation * Vec3.Right;
+        public Vec3 left => rotation * Vec3.Left;
 
-        public Vec3 back
-        {
-            get
-            {
-                return rotation * Vec3.Back;
-            }
-        }
-
-        public Vec3 up
-        {
-            get
-            {
-                return rotation * Vec3.Up;
-            }
-        }
-
-        public Vec3 down
-        {
-            get
-            {
-                return rotation * Vec3.Down;
-            }
-        }
-
-        public Vec3 right
-        {
-            get
-            {
-                return rotation * Vec3.Right;
-            }
-        }
-
-        public Vec3 left
-        {
-            get
-            {
-                return rotation * Vec3.Left;
-            }
-        }
-
-        // --- Hierarchy ---
+        // --- Jerarquía ---
         public MyTransform parent
         {
-            get
-            {
-                return _parent;
-            }
-            set
-            {
-                SetParent(value, true);
-            }
+            get => _parent;
+            set => SetParent(value, true);
         }
 
         public MyTransform root
@@ -239,30 +180,30 @@ namespace CustomMath
             }
         }
 
-        public int childCount
-        {
-            get
-            {
-                return _children.Count;
-            }
-        }
+        public int childCount => _children.Count;
 
         public int hierarchyCapacity { get; set; }
 
-        public int hierarchyCount
-        {
-            get
-            {
-                return GetHierarchyCountRecursive(root);
-            }
-        }
+        public int hierarchyCount => GetHierarchyCountRecursive(root);
 
         public bool hasChanged { get; set; }
         public string name { get; set; } = "MyTransform";
         #endregion
 
         #region Constructors
-        public MyTransform() { }
+        public MyTransform()
+        {
+            SetDirty();
+        }
+
+        public MyTransform(Transform unityTransform)
+        {
+            this._localPosition = new Vec3(unityTransform.localPosition);
+            this._localRotation = unityTransform.localRotation;
+            this._localScale = new Vec3(unityTransform.localScale);
+
+            SetDirty();
+        }
         #endregion
 
         #region HierarchyMethods
@@ -327,7 +268,9 @@ namespace CustomMath
             {
                 return;
             }
-            index = Math.Clamp(index, 0, _parent._children.Count - 1);
+
+            // Corregido: compatibilidad segura con Mathf.Clamp o comprobación manual
+            index = Mathf.Clamp(index, 0, _parent._children.Count - 1);
             _parent._children.Remove(this);
             _parent._children.Insert(index, this);
         }
@@ -422,7 +365,7 @@ namespace CustomMath
             Quat eulerRot = Quat.Euler(eulers);
             if (space == Space.Self)
             {
-                _localRotation *= eulerRot;
+                localRotation *= eulerRot;
             }
             else
             {
@@ -440,7 +383,7 @@ namespace CustomMath
             Quat q = Quat.AngleAxis(angle, axis);
             if (space == Space.Self)
             {
-                _localRotation *= q;
+                localRotation *= q;
             }
             else
             {
@@ -551,11 +494,32 @@ namespace CustomMath
         #region PrivateUtilityMethods
         private void SetDirty()
         {
+            if (_isDirty) return; // Evita propagación redundante en la jerarquía
+
             hasChanged = true;
+            _isDirty = true;
+
             foreach (MyTransform child in _children)
             {
                 child.SetDirty();
             }
+        }
+
+        private void UpdateMatrices()
+        {
+            Mat4x4 localMatrix = Mat4x4.TRS(_localPosition, _localRotation, _localScale);
+
+            if (_parent != null)
+            {
+                _cachedLocalToWorld = _parent.localToWorldMatrix * localMatrix;
+            }
+            else
+            {
+                _cachedLocalToWorld = localMatrix;
+            }
+
+            _cachedWorldToLocal = _cachedLocalToWorld.inverse;
+            _isDirty = false;
         }
 
         private int GetHierarchyCountRecursive(MyTransform current)
